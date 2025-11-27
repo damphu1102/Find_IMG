@@ -82,7 +82,7 @@ def remove_vietnamese_accents(text):
         result += vietnamese_map.get(char, char)
     return result
 
-def download_image(url, filename, folder):
+def download_image(url, filename, folder, image_number=1):
     """Hàm tải ảnh từ URL và lưu vào folder. Trả về đường dẫn đầy đủ đến file hoặc None nếu lỗi"""
     try:
         if not os.path.exists(folder):
@@ -98,8 +98,8 @@ def download_image(url, filename, folder):
             no_accent = remove_vietnamese_accents(filename)
             # Chỉ giữ chữ, số và khoảng trắng
             clean_name = "".join([c for c in no_accent if c.isalnum() or c == ' ']).strip()
-            # Thay khoảng trắng bằng dấu gạch dưới
-            file_name = f"{clean_name.replace(' ', '_')}.jpg"
+            # Thay khoảng trắng bằng dấu gạch dưới và thêm số thứ tự
+            file_name = f"{clean_name.replace(' ', '_')}_{image_number}.jpg"
             file_path = os.path.join(folder, file_name)
             
             with open(file_path, 'wb') as f:
@@ -141,17 +141,18 @@ def read_products_from_excel(file_path):
         print(f"[Lỗi] Không đọc được file Excel: {e}")
         return []
 
-def write_image_path_to_excel(file_path, row_index, image_path):
-    """Ghi đường dẫn file ảnh vào cột thứ 3 (img) của Excel"""
+def write_image_paths_to_excel(file_path, row_index, image_paths):
+    """Ghi đường dẫn các file ảnh vào cột 3, 4, 5 (img1, img2, img3) của Excel"""
     try:
         wb = openpyxl.load_workbook(file_path)
         ws = wb.active
         
-        # Ghi vào cột C (cột 3), dòng tương ứng
-        ws.cell(row=row_index, column=3, value=image_path)
+        # Ghi vào cột C, D, E (cột 3, 4, 5), dòng tương ứng
+        for i, image_path in enumerate(image_paths, start=3):
+            ws.cell(row=row_index, column=i, value=image_path)
         
         wb.save(file_path)
-        print(f">>> Đã ghi đường dẫn vào Excel dòng {row_index}")
+        print(f">>> Đã ghi {len(image_paths)} đường dẫn vào Excel dòng {row_index}")
     except Exception as e:
         print(f"[Lỗi] Không ghi được vào Excel: {e}")
 
@@ -205,8 +206,8 @@ def main():
             print(f">>> Đợi {delay:.1f}s để trang load...")
             time.sleep(delay)
             
-            # 3. Tìm ảnh có thể click được
-            print(">>> Tìm ảnh trong kết quả...")
+            # 3. Tìm 3 ảnh đầu tiên có thể click được
+            print(">>> Tìm 3 ảnh đầu tiên trong kết quả...")
             
             # Thử nhiều selector khác nhau cho Google Images
             thumbnail_selectors = [
@@ -216,7 +217,7 @@ def main():
                 '//h3//ancestor::div[2]//img'
             ]
             
-            thumbnail = None
+            thumbnails_to_click = []
             for selector in thumbnail_selectors:
                 try:
                     print(f">>> Thử selector: {selector[:40]}...")
@@ -225,73 +226,93 @@ def main():
                     )
                     thumbnails = driver.find_elements(By.XPATH, selector)
                     
-                    # Tìm ảnh đầu tiên có thể click được
-                    for thumb in thumbnails[:10]:  # Chỉ thử 10 ảnh đầu
+                    # Tìm 3 ảnh đầu tiên có thể click được
+                    for thumb in thumbnails[:15]:  # Thử 15 ảnh đầu để tìm 3 ảnh tốt
                         try:
                             if thumb.is_displayed() and thumb.size['width'] > 50:
-                                thumbnail = thumb
-                                print(f">>> Tìm thấy ảnh có thể click!")
-                                break
+                                thumbnails_to_click.append(thumb)
+                                if len(thumbnails_to_click) == 3:
+                                    print(f">>> Tìm thấy 3 ảnh có thể click!")
+                                    break
                         except:
                             continue
                     
-                    if thumbnail:
+                    if len(thumbnails_to_click) >= 3:
                         break
                 except:
                     continue
             
-            if not thumbnail:
+            if not thumbnails_to_click:
                 raise Exception("Không tìm thấy ảnh có thể click")
             
-            # 4. Click vào ảnh bằng JavaScript (tránh lỗi element not interactable)
-            print(">>> Click vào ảnh để xem full size...")
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", thumbnail)
-            time.sleep(1)
-            driver.execute_script("arguments[0].click();", thumbnail)
-            time.sleep(3)
+            print(f">>> Tìm được {len(thumbnails_to_click)} ảnh")
             
-            # 5. Lấy ảnh full size từ panel bên phải
-            # Sau khi click, Google hiển thị ảnh lớn hơn
-            print(">>> Đang tìm ảnh full size...")
+            # 4. Lặp qua 3 ảnh và tải về
+            downloaded_paths = []
             
-            # Tìm tất cả ảnh trên trang và lấy ảnh lớn nhất
-            all_images = driver.find_elements(By.TAG_NAME, "img")
-            
-            img_url = None
-            max_size = 0
-            
-            for img in all_images:
+            for img_num, thumbnail in enumerate(thumbnails_to_click, start=1):
                 try:
-                    src = img.get_attribute("src")
-                    if not src or "data:image" in src or "gstatic" in src:
-                        continue
+                    print(f"\n>>> Đang xử lý ảnh {img_num}/3...")
                     
-                    # Lấy kích thước ảnh
-                    width = img.size.get('width', 0)
-                    height = img.size.get('height', 0)
-                    size = width * height
+                    # Click vào ảnh bằng JavaScript
+                    print(f">>> Click vào ảnh {img_num}...")
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", thumbnail)
+                    time.sleep(1)
+                    driver.execute_script("arguments[0].click();", thumbnail)
+                    time.sleep(3)
                     
-                    if size > max_size and "http" in src:
-                        max_size = size
-                        img_url = src
-                        print(f">>> Tìm thấy ảnh {width}x{height}px")
-                except:
-                    continue
+                    # 5. Lấy ảnh full size từ panel bên phải
+                    print(f">>> Đang tìm ảnh full size {img_num}...")
+                    
+                    # Tìm tất cả ảnh trên trang và lấy ảnh lớn nhất
+                    all_images = driver.find_elements(By.TAG_NAME, "img")
+                    
+                    img_url = None
+                    max_size = 0
+                    
+                    for img in all_images:
+                        try:
+                            src = img.get_attribute("src")
+                            if not src or "data:image" in src or "gstatic" in src:
+                                continue
+                            
+                            # Lấy kích thước ảnh
+                            width = img.size.get('width', 0)
+                            height = img.size.get('height', 0)
+                            size = width * height
+                            
+                            if size > max_size and "http" in src:
+                                max_size = size
+                                img_url = src
+                        except:
+                            continue
+                    
+                    # 6. Nếu không tìm thấy, thử lấy từ thumbnail
+                    if not img_url:
+                        print(f">>> Không lấy được ảnh full {img_num}, dùng thumbnail...")
+                        img_url = thumbnail.get_attribute("src")
+                    
+                    # 7. Download ảnh - Đặt tên theo NAME (cột 2) với số thứ tự
+                    if img_url and "http" in img_url:
+                        image_path = download_image(img_url, name, FOLDER_NAME, img_num)
+                        if image_path:
+                            downloaded_paths.append(image_path)
+                            print(f">>> Đã tải ảnh {img_num}: {image_path}")
+                        else:
+                            downloaded_paths.append(f"LỖI_ẢNH_{img_num}")
+                    else:
+                        print(f"[Bỏ qua] Link ảnh {img_num} không hợp lệ")
+                        downloaded_paths.append(f"KHÔNG_TÌM_THẤY_{img_num}")
+                    
+                except Exception as e:
+                    print(f"[Lỗi] Không thể tải ảnh {img_num}: {e}")
+                    downloaded_paths.append(f"LỖI_ẢNH_{img_num}")
             
-            # 6. Nếu không tìm thấy, thử lấy từ thumbnail
-            if not img_url:
-                print(">>> Không lấy được ảnh full, dùng thumbnail...")
-                img_url = thumbnail.get_attribute("src")
-            
-            # 7. Download ảnh - Đặt tên theo NAME (cột 2)
-            if img_url and "http" in img_url:
-                image_path = download_image(img_url, name, FOLDER_NAME)
-                if image_path:
-                    # Ghi đường dẫn đầy đủ vào cột 3 (img) của Excel
-                    write_image_path_to_excel(EXCEL_FILE, index, image_path)
+            # 8. Ghi tất cả đường dẫn vào Excel (cột 3, 4, 5)
+            if downloaded_paths:
+                write_image_paths_to_excel(EXCEL_FILE, index, downloaded_paths)
             else:
-                print(f"[Bỏ qua] Link ảnh không hợp lệ: {img_url}")
-                write_image_path_to_excel(EXCEL_FILE, index, "KHÔNG TÌM THẤY")
+                write_image_paths_to_excel(EXCEL_FILE, index, ["KHÔNG TÌM THẤY", "", ""])
                 # Lưu screenshot để debug
                 screenshot_path = f"debug_{barcode[:20]}.png"
                 driver.save_screenshot(screenshot_path)
@@ -299,7 +320,7 @@ def main():
 
         except Exception as e:
             print(f"[Lỗi] Có vấn đề khi xử lý {name}: {e}")
-            write_image_path_to_excel(EXCEL_FILE, index, "LỖI")
+            write_image_paths_to_excel(EXCEL_FILE, index, ["LỖI", "LỖI", "LỖI"])
             # Lưu screenshot khi lỗi
             try:
                 driver.save_screenshot(f"error_{barcode[:20]}.png")

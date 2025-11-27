@@ -6,9 +6,10 @@ Công cụ tự động tìm kiếm và tải hình ảnh sản phẩm từ Goog
 
 - ✅ Đọc danh sách sản phẩm từ file Excel (DSSP.xlsx)
 - ✅ Tự động tìm kiếm trên Google Images
+- ✅ **Tải 3 ảnh đầu tiên** cho mỗi sản phẩm (có đánh số thứ tự)
 - ✅ Click vào ảnh để lấy phiên bản full size (chất lượng cao)
 - ✅ Tải ảnh về thư mục `hinh_anh_san_pham`
-- ✅ Tự động ghi tên file ảnh vào Excel
+- ✅ Tự động ghi tên file ảnh vào Excel (3 cột riêng biệt)
 - ✅ Tên file không dấu, thay khoảng trắng bằng `_`
 - ✅ Sử dụng Chrome profile để tránh bị chặn
 - ✅ Anti-detection (tránh bị phát hiện là bot)
@@ -50,13 +51,12 @@ Find_IMG/
 
 ### 1. Chuẩn bị file Excel
 
-Mở file `DSSP.xlsx` và nhập danh sách sản phẩm vào **cột A** (từ dòng 2 trở đi):
+Mở file `DSSP.xlsx` và nhập danh sách sản phẩm vào **cột A (barcode)** và **cột B (name)** (từ dòng 2 trở đi):
 
-| Tên sản phẩm             | Tên file ảnh     |
-| ------------------------ | ---------------- |
-| iPhone 15 Pro Max 256GB  | _(tự động điền)_ |
-| Samsung Galaxy S24 Ultra | _(tự động điền)_ |
-| Chuột Logitech G102      | _(tự động điền)_ |
+| Barcode | Tên sản phẩm             | Ảnh 1            | Ảnh 2            | Ảnh 3            |
+| ------- | ------------------------ | ---------------- | ---------------- | ---------------- |
+| 8934868...  | Colgate Active Fresh 150g  | _(tự động điền)_ | _(tự động điền)_ | _(tự động điền)_ |
+| 8936097...  | Kem đánh răng PS 200g | _(tự động điền)_ | _(tự động điền)_ | _(tự động điền)_ |
 
 ### 2. Chạy script
 
@@ -70,17 +70,20 @@ Script sẽ:
 
 1. Mở Chrome với profile riêng
 2. Truy cập Google Images
-3. Tìm kiếm từng sản phẩm
-4. Click vào ảnh đầu tiên để lấy full size
-5. Tải ảnh về thư mục `hinh_anh_san_pham`
-6. Ghi tên file vào cột B của Excel
+3. Tìm kiếm từng sản phẩm theo barcode (cột A)
+4. Click vào **3 ảnh đầu tiên** để lấy full size
+5. Tải ảnh về thư mục `hinh_anh_san_pham` với số thứ tự (_1, _2, _3)
+6. Ghi tên file vào cột C, D, E của Excel
 
 ### 4. Kết quả
 
 - **Ảnh đã tải**: Lưu trong thư mục `hinh_anh_san_pham/`
-- **Tên file**: Không dấu, dấu cách thay bằng `_`
-  - Ví dụ: `iPhone_15_Pro_Max_256GB.jpg`
-- **Excel**: Cột B tự động cập nhật tên file hoặc trạng thái lỗi
+- **Tên file**: Không dấu, dấu cách thay bằng `_`, có số thứ tự
+  - Ví dụ: 
+    - `Colgate_Active_Fresh_150g_1.jpg`
+    - `Colgate_Active_Fresh_150g_2.jpg`
+    - `Colgate_Active_Fresh_150g_3.jpg`
+- **Excel**: Cột C, D, E tự động cập nhật tên file hoặc trạng thái lỗi
 
 ## Cấu hình
 
@@ -167,6 +170,12 @@ MIT License - Tự do sử dụng cho mục đích cá nhân và thương mại.
 Phát triển bởi AI Assistant với sự hỗ trợ của Kiro IDE.
 
 ## Changelog
+
+### v2.0.0 (2024-11-27)
+
+- ✅ **Tải 3 ảnh đầu tiên** cho mỗi sản phẩm
+- ✅ Đánh số thứ tự ảnh (_1, _2, _3)
+- ✅ Ghi 3 đường dẫn vào 3 cột Excel riêng biệt
 
 ### v1.0.0 (2024-11-27)
 
