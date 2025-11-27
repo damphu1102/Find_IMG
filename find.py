@@ -3,7 +3,11 @@ import random
 import os
 import requests
 import openpyxl
+import urllib3
 from selenium import webdriver
+
+# Tắt cảnh báo SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -79,12 +83,16 @@ def remove_vietnamese_accents(text):
     return result
 
 def download_image(url, filename, folder):
-    """Hàm tải ảnh từ URL và lưu vào folder. Trả về tên file đã lưu hoặc None nếu lỗi"""
+    """Hàm tải ảnh từ URL và lưu vào folder. Trả về đường dẫn đầy đủ đến file hoặc None nếu lỗi"""
     try:
         if not os.path.exists(folder):
             os.makedirs(folder)
             
-        response = requests.get(url, stream=True, timeout=10)
+        # Tắt SSL verification và thêm headers để tránh bị chặn
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, stream=True, timeout=10, verify=False, headers=headers)
         if response.status_code == 200:
             # Bỏ dấu tiếng Việt
             no_accent = remove_vietnamese_accents(filename)
@@ -97,7 +105,10 @@ def download_image(url, filename, folder):
             with open(file_path, 'wb') as f:
                 f.write(response.content)
             print(f"[OK] Đã tải: {file_name}")
-            return file_name
+            
+            # Trả về đường dẫn rút gọn: folder\filename.jpg
+            relative_path = f"{folder}\\{file_name}"
+            return relative_path
         else:
             print(f"[Lỗi] Không tải được ảnh: {filename}")
             return None
@@ -130,17 +141,17 @@ def read_products_from_excel(file_path):
         print(f"[Lỗi] Không đọc được file Excel: {e}")
         return []
 
-def write_image_name_to_excel(file_path, row_index, image_name):
-    """Ghi tên file ảnh vào cột thứ 3 (img) của Excel"""
+def write_image_path_to_excel(file_path, row_index, image_path):
+    """Ghi đường dẫn file ảnh vào cột thứ 3 (img) của Excel"""
     try:
         wb = openpyxl.load_workbook(file_path)
         ws = wb.active
         
         # Ghi vào cột C (cột 3), dòng tương ứng
-        ws.cell(row=row_index, column=3, value=image_name)
+        ws.cell(row=row_index, column=3, value=image_path)
         
         wb.save(file_path)
-        print(f">>> Đã ghi '{image_name}' vào Excel dòng {row_index}")
+        print(f">>> Đã ghi đường dẫn vào Excel dòng {row_index}")
     except Exception as e:
         print(f"[Lỗi] Không ghi được vào Excel: {e}")
 
@@ -274,13 +285,13 @@ def main():
             
             # 7. Download ảnh - Đặt tên theo NAME (cột 2)
             if img_url and "http" in img_url:
-                image_name = download_image(img_url, name, FOLDER_NAME)
-                if image_name:
-                    # Ghi tên file vào cột 3 (img) của Excel
-                    write_image_name_to_excel(EXCEL_FILE, index, image_name)
+                image_path = download_image(img_url, name, FOLDER_NAME)
+                if image_path:
+                    # Ghi đường dẫn đầy đủ vào cột 3 (img) của Excel
+                    write_image_path_to_excel(EXCEL_FILE, index, image_path)
             else:
                 print(f"[Bỏ qua] Link ảnh không hợp lệ: {img_url}")
-                write_image_name_to_excel(EXCEL_FILE, index, "KHÔNG TÌM THẤY")
+                write_image_path_to_excel(EXCEL_FILE, index, "KHÔNG TÌM THẤY")
                 # Lưu screenshot để debug
                 screenshot_path = f"debug_{barcode[:20]}.png"
                 driver.save_screenshot(screenshot_path)
@@ -288,7 +299,7 @@ def main():
 
         except Exception as e:
             print(f"[Lỗi] Có vấn đề khi xử lý {name}: {e}")
-            write_image_name_to_excel(EXCEL_FILE, index, "LỖI")
+            write_image_path_to_excel(EXCEL_FILE, index, "LỖI")
             # Lưu screenshot khi lỗi
             try:
                 driver.save_screenshot(f"error_{barcode[:20]}.png")
