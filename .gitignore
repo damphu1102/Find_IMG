@@ -25,6 +25,7 @@ wheels/
 
 # Selenium
 selenium_profile/
+selenium_profile_worker_*/
 *.png
 *.jpg
 debug_*.png

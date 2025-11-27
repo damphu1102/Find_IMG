@@ -7,6 +7,7 @@ Công cụ tự động tìm kiếm và tải hình ảnh sản phẩm từ Goog
 - ✅ Đọc danh sách sản phẩm từ file Excel (DSSP.xlsx)
 - ✅ Tự động tìm kiếm trên Google Images
 - ✅ **Tải 3 ảnh đầu tiên** cho mỗi sản phẩm (có đánh số thứ tự)
+- ✅ **Multiprocessing**: Chạy 3 browser song song (tăng tốc 3x)
 - ✅ Click vào ảnh để lấy phiên bản full size (chất lượng cao)
 - ✅ Tải ảnh về thư mục `hinh_anh_san_pham`
 - ✅ Tự động ghi tên file ảnh vào Excel (3 cột riêng biệt)
@@ -96,9 +97,17 @@ FOLDER_NAME = "hinh_anh_san_pham"
 # File Excel
 EXCEL_FILE = "DSSP.xlsx"
 
+# Số browser chạy song song (3-5 tùy RAM)
+NUM_WORKERS = 3
+
 # Chạy ẩn (không hiện trình duyệt)
 # chrome_options.add_argument("--headless")  # Bỏ comment để bật
 ```
+
+**Lưu ý về NUM_WORKERS:**
+- 3 workers: Phù hợp với máy 8GB RAM
+- 4-5 workers: Máy 16GB RAM trở lên
+- Mỗi Chrome instance tốn ~500MB-1GB RAM
 
 ## Xử lý lỗi
 
@@ -170,6 +179,13 @@ MIT License - Tự do sử dụng cho mục đích cá nhân và thương mại.
 Phát triển bởi AI Assistant với sự hỗ trợ của Kiro IDE.
 
 ## Changelog
+
+### v2.1.0 (2024-11-27)
+
+- ✅ **Multiprocessing**: Chạy 3 browser song song (tăng tốc 3x)
+- ✅ Giảm delay xuống 2-3s (từ 3-5s)
+- ✅ Thread-safe Excel writing với Lock
+- ✅ Mỗi worker có profile riêng
 
 ### v2.0.0 (2024-11-27)
 

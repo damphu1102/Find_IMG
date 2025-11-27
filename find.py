@@ -5,6 +5,8 @@ import requests
 import openpyxl
 import urllib3
 from selenium import webdriver
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Tắt cảnh báo SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -18,13 +20,17 @@ from selenium.webdriver.support import expected_conditions as EC
 # --- CẤU HÌNH ---
 FOLDER_NAME = "hinh_anh_san_pham"
 EXCEL_FILE = "DSSP.xlsx"
+NUM_WORKERS = 3  # Số browser chạy song song (3 khuyến nghị, 4-5 nếu RAM >= 16GB)
 
-def setup_driver():
+# Lock để tránh xung đột khi ghi Excel
+excel_lock = threading.Lock()
+
+def setup_driver(worker_id=0):
     """Cấu hình Chrome Driver để tránh bị phát hiện là Bot"""
     chrome_options = Options()
     
-    # Tạo thư mục profile riêng cho Selenium (tránh conflict với Chrome đang chạy)
-    selenium_profile = os.path.join(os.getcwd(), "selenium_profile")
+    # Tạo thư mục profile riêng cho mỗi worker (tránh conflict)
+    selenium_profile = os.path.join(os.getcwd(), f"selenium_profile_worker_{worker_id}")
     if not os.path.exists(selenium_profile):
         os.makedirs(selenium_profile)
     
@@ -41,6 +47,9 @@ def setup_driver():
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    # Đặt vị trí cửa sổ khác nhau cho mỗi worker (dễ theo dõi)
+    chrome_options.add_argument(f"--window-position={worker_id * 100},{worker_id * 100}")
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -142,19 +151,192 @@ def read_products_from_excel(file_path):
         return []
 
 def write_image_paths_to_excel(file_path, row_index, image_paths):
-    """Ghi đường dẫn các file ảnh vào cột 3, 4, 5 (img1, img2, img3) của Excel"""
+    """Ghi đường dẫn các file ảnh vào cột 3, 4, 5 (img1, img2, img3) của Excel - Thread-safe"""
+    with excel_lock:
+        try:
+            wb = openpyxl.load_workbook(file_path)
+            ws = wb.active
+            
+            # Ghi vào cột C, D, E (cột 3, 4, 5), dòng tương ứng
+            for i, image_path in enumerate(image_paths, start=3):
+                ws.cell(row=row_index, column=i, value=image_path)
+            
+            wb.save(file_path)
+            print(f"[Worker] Đã ghi {len(image_paths)} đường dẫn vào Excel dòng {row_index}")
+        except Exception as e:
+            print(f"[Lỗi] Không ghi được vào Excel: {e}")
+
+def process_product_thread(product_data, worker_id):
+    """Xử lý một sản phẩm - hàm này sẽ được gọi bởi ThreadPoolExecutor"""
+    product, index = product_data
+    barcode = product['barcode']
+    name = product['name']
+    
+    # Lấy thread ID để tạo profile riêng
+    thread_id = threading.get_ident() % 1000
+    profile_id = f"{worker_id}_{thread_id}"
+    
+    print(f"\n[Worker {worker_id}] --- Đang xử lý: {name} (Barcode: {barcode}) ---")
+    
+    driver = None
     try:
-        wb = openpyxl.load_workbook(file_path)
-        ws = wb.active
+        # Delay ngẫu nhiên để tránh khởi động đồng thời quá nhiều Chrome instances
+        startup_delay = random.uniform(0.3, 1.0)
+        time.sleep(startup_delay)
         
-        # Ghi vào cột C, D, E (cột 3, 4, 5), dòng tương ứng
-        for i, image_path in enumerate(image_paths, start=3):
-            ws.cell(row=row_index, column=i, value=image_path)
+        # Khởi động driver cho worker này
+        driver = setup_driver(profile_id)
         
-        wb.save(file_path)
-        print(f">>> Đã ghi {len(image_paths)} đường dẫn vào Excel dòng {row_index}")
+        # Đợi Chrome mở xong
+        time.sleep(2)
+        
+        # Đóng các tab cũ nếu có
+        if len(driver.window_handles) > 1:
+            main_window = driver.window_handles[0]
+            for handle in driver.window_handles[1:]:
+                driver.switch_to.window(handle)
+                driver.close()
+            driver.switch_to.window(main_window)
+        
+        # Truy cập Google Images
+        driver.get("https://www.google.com/imghp?hl=vi")
+        time.sleep(2)
+        
+        # 1. Tạo URL tìm kiếm Google Images theo BARCODE
+        search_url = f"https://www.google.com/search?q={barcode.replace(' ', '+')}&tbm=isch&hl=vi"
+        print(f"[Worker {worker_id}] >>> Tìm kiếm theo barcode: {barcode}")
+        driver.get(search_url)
+        
+        # 2. Random delay (giảm xuống vì có nhiều worker)
+        delay = random.uniform(2, 3)
+        print(f"[Worker {worker_id}] >>> Đợi {delay:.1f}s để trang load...")
+        time.sleep(delay)
+        
+        # 3. Tìm 3 ảnh đầu tiên có thể click được
+        print(f"[Worker {worker_id}] >>> Tìm 3 ảnh đầu tiên trong kết quả...")
+        
+        # Thử nhiều selector khác nhau cho Google Images
+        thumbnail_selectors = [
+            '//img[@class="rg_i Q4LuWd"]',
+            '//div[@jsname]//img',
+            '//img[contains(@src, "gstatic")]',
+            '//h3//ancestor::div[2]//img'
+        ]
+        
+        thumbnails_to_click = []
+        for selector in thumbnail_selectors:
+            try:
+                WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located((By.XPATH, selector))
+                )
+                thumbnails = driver.find_elements(By.XPATH, selector)
+                
+                # Tìm 3 ảnh đầu tiên có thể click được
+                for thumb in thumbnails[:15]:  # Thử 15 ảnh đầu để tìm 3 ảnh tốt
+                    try:
+                        if thumb.is_displayed() and thumb.size['width'] > 50:
+                            thumbnails_to_click.append(thumb)
+                            if len(thumbnails_to_click) == 3:
+                                print(f"[Worker {worker_id}] >>> Tìm thấy 3 ảnh!")
+                                break
+                    except:
+                        continue
+                
+                if len(thumbnails_to_click) >= 3:
+                    break
+            except:
+                continue
+        
+        if not thumbnails_to_click:
+            raise Exception("Không tìm thấy ảnh có thể click")
+        
+        print(f"[Worker {worker_id}] >>> Tìm được {len(thumbnails_to_click)} ảnh")
+        
+        # 4. Lặp qua 3 ảnh và tải về
+        downloaded_paths = []
+        
+        for img_num, thumbnail in enumerate(thumbnails_to_click, start=1):
+            try:
+                print(f"[Worker {worker_id}] >>> Đang xử lý ảnh {img_num}/3...")
+                
+                # Click vào ảnh bằng JavaScript
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", thumbnail)
+                time.sleep(0.5)
+                driver.execute_script("arguments[0].click();", thumbnail)
+                time.sleep(2)
+                
+                # 5. Lấy ảnh full size từ panel bên phải
+                all_images = driver.find_elements(By.TAG_NAME, "img")
+                
+                img_url = None
+                max_size = 0
+                
+                for img in all_images:
+                    try:
+                        src = img.get_attribute("src")
+                        if not src or "data:image" in src or "gstatic" in src:
+                            continue
+                        
+                        # Lấy kích thước ảnh
+                        width = img.size.get('width', 0)
+                        height = img.size.get('height', 0)
+                        size = width * height
+                        
+                        if size > max_size and "http" in src:
+                            max_size = size
+                            img_url = src
+                    except:
+                        continue
+                
+                # 6. Nếu không tìm thấy, thử lấy từ thumbnail
+                if not img_url:
+                    img_url = thumbnail.get_attribute("src")
+                
+                # 7. Download ảnh - Đặt tên theo NAME (cột 2) với số thứ tự
+                if img_url and "http" in img_url:
+                    image_path = download_image(img_url, name, FOLDER_NAME, img_num)
+                    if image_path:
+                        downloaded_paths.append(image_path)
+                        print(f"[Worker {worker_id}] >>> Đã tải ảnh {img_num}")
+                    else:
+                        downloaded_paths.append(f"LỖI_ẢNH_{img_num}")
+                else:
+                    downloaded_paths.append(f"KHÔNG_TÌM_THẤY_{img_num}")
+                
+            except Exception as e:
+                print(f"[Worker {worker_id}] [Lỗi] Không thể tải ảnh {img_num}: {e}")
+                downloaded_paths.append(f"LỖI_ẢNH_{img_num}")
+        
+        # 8. Ghi tất cả đường dẫn vào Excel (cột 3, 4, 5)
+        if downloaded_paths:
+            write_image_paths_to_excel(EXCEL_FILE, index, downloaded_paths)
+        else:
+            write_image_paths_to_excel(EXCEL_FILE, index, ["KHÔNG TÌM THẤY", "", ""])
+            # Lưu screenshot để debug
+            screenshot_path = f"debug_{barcode[:20]}.png"
+            driver.save_screenshot(screenshot_path)
+        
+        print(f"[Worker {worker_id}] ✓ Hoàn thành: {name}")
+        return True
+        
     except Exception as e:
-        print(f"[Lỗi] Không ghi được vào Excel: {e}")
+        print(f"[Worker {worker_id}] [Lỗi] Có vấn đề khi xử lý {name}: {e}")
+        write_image_paths_to_excel(EXCEL_FILE, index, ["LỖI", "LỖI", "LỖI"])
+        # Lưu screenshot khi lỗi
+        try:
+            if driver:
+                driver.save_screenshot(f"error_{barcode[:20]}.png")
+        except:
+            pass
+        return False
+    
+    finally:
+        # Đóng driver sau khi xử lý xong sản phẩm
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
 
 def main():
     # Đọc danh sách sản phẩm từ Excel
@@ -164,171 +346,40 @@ def main():
         print("[Lỗi] Không có sản phẩm nào để xử lý!")
         return
     
-    print(">>> Đang khởi động Chrome với profile user...")
-    driver = setup_driver()
+    print(f"\n{'='*60}")
+    print(f">>> BẮT ĐẦU XỬ LÝ {len(products)} SẢN PHẨM VỚI {NUM_WORKERS} WORKERS")
+    print(f"{'='*60}\n")
     
-    # Đợi Chrome mở xong (có thể mở các tab cũ)
-    time.sleep(3)
+    # Chuẩn bị dữ liệu
+    product_data = []
+    for idx, product in enumerate(products, start=2):  # start=2 vì dòng 1 là header
+        product_data.append((product, idx))
     
-    # Đóng tất cả tab cũ và mở tab mới
-    print(f">>> Số tab đang mở: {len(driver.window_handles)}")
+    # Sử dụng ThreadPoolExecutor thay vì multiprocessing
+    # Threads chia sẻ memory nên Lock hoạt động tốt hơn trên Windows
+    completed = 0
+    total = len(product_data)
     
-    # Giữ lại tab đầu tiên, đóng các tab khác
-    if len(driver.window_handles) > 1:
-        main_window = driver.window_handles[0]
-        for handle in driver.window_handles[1:]:
-            driver.switch_to.window(handle)
-            driver.close()
-        driver.switch_to.window(main_window)
-    
-    # Bây giờ điều hướng đến Google Images
-    print(">>> Đang truy cập Google Images...")
-    driver.get("https://www.google.com/imghp?hl=vi")
-    time.sleep(3)
-    
-    print(f">>> URL hiện tại: {driver.current_url}")
-
-    for index, product in enumerate(products, start=2):  # start=2 vì dòng 1 là header
-        barcode = product['barcode']
-        name = product['name']
+    with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+        # Submit tất cả tasks
+        future_to_product = {
+            executor.submit(process_product_thread, data, worker_id): data 
+            for worker_id, data in enumerate(product_data)
+        }
         
-        print(f"\n--- Đang xử lý: {name} (Barcode: {barcode}) ---")
-        
-        try:
-            # 1. Tạo URL tìm kiếm Google Images theo BARCODE
-            search_url = f"https://www.google.com/search?q={barcode.replace(' ', '+')}&tbm=isch&hl=vi"
-            print(f">>> Tìm kiếm theo barcode: {barcode}")
-            print(f">>> Truy cập: {search_url}")
-            driver.get(search_url)
-            
-            # 2. Random delay (QUAN TRỌNG: để tránh bị chặn)
-            delay = random.uniform(3, 5)
-            print(f">>> Đợi {delay:.1f}s để trang load...")
-            time.sleep(delay)
-            
-            # 3. Tìm 3 ảnh đầu tiên có thể click được
-            print(">>> Tìm 3 ảnh đầu tiên trong kết quả...")
-            
-            # Thử nhiều selector khác nhau cho Google Images
-            thumbnail_selectors = [
-                '//img[@class="rg_i Q4LuWd"]',
-                '//div[@jsname]//img',
-                '//img[contains(@src, "gstatic")]',
-                '//h3//ancestor::div[2]//img'
-            ]
-            
-            thumbnails_to_click = []
-            for selector in thumbnail_selectors:
-                try:
-                    print(f">>> Thử selector: {selector[:40]}...")
-                    WebDriverWait(driver, 5).until(
-                        EC.presence_of_element_located((By.XPATH, selector))
-                    )
-                    thumbnails = driver.find_elements(By.XPATH, selector)
-                    
-                    # Tìm 3 ảnh đầu tiên có thể click được
-                    for thumb in thumbnails[:15]:  # Thử 15 ảnh đầu để tìm 3 ảnh tốt
-                        try:
-                            if thumb.is_displayed() and thumb.size['width'] > 50:
-                                thumbnails_to_click.append(thumb)
-                                if len(thumbnails_to_click) == 3:
-                                    print(f">>> Tìm thấy 3 ảnh có thể click!")
-                                    break
-                        except:
-                            continue
-                    
-                    if len(thumbnails_to_click) >= 3:
-                        break
-                except:
-                    continue
-            
-            if not thumbnails_to_click:
-                raise Exception("Không tìm thấy ảnh có thể click")
-            
-            print(f">>> Tìm được {len(thumbnails_to_click)} ảnh")
-            
-            # 4. Lặp qua 3 ảnh và tải về
-            downloaded_paths = []
-            
-            for img_num, thumbnail in enumerate(thumbnails_to_click, start=1):
-                try:
-                    print(f"\n>>> Đang xử lý ảnh {img_num}/3...")
-                    
-                    # Click vào ảnh bằng JavaScript
-                    print(f">>> Click vào ảnh {img_num}...")
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", thumbnail)
-                    time.sleep(1)
-                    driver.execute_script("arguments[0].click();", thumbnail)
-                    time.sleep(3)
-                    
-                    # 5. Lấy ảnh full size từ panel bên phải
-                    print(f">>> Đang tìm ảnh full size {img_num}...")
-                    
-                    # Tìm tất cả ảnh trên trang và lấy ảnh lớn nhất
-                    all_images = driver.find_elements(By.TAG_NAME, "img")
-                    
-                    img_url = None
-                    max_size = 0
-                    
-                    for img in all_images:
-                        try:
-                            src = img.get_attribute("src")
-                            if not src or "data:image" in src or "gstatic" in src:
-                                continue
-                            
-                            # Lấy kích thước ảnh
-                            width = img.size.get('width', 0)
-                            height = img.size.get('height', 0)
-                            size = width * height
-                            
-                            if size > max_size and "http" in src:
-                                max_size = size
-                                img_url = src
-                        except:
-                            continue
-                    
-                    # 6. Nếu không tìm thấy, thử lấy từ thumbnail
-                    if not img_url:
-                        print(f">>> Không lấy được ảnh full {img_num}, dùng thumbnail...")
-                        img_url = thumbnail.get_attribute("src")
-                    
-                    # 7. Download ảnh - Đặt tên theo NAME (cột 2) với số thứ tự
-                    if img_url and "http" in img_url:
-                        image_path = download_image(img_url, name, FOLDER_NAME, img_num)
-                        if image_path:
-                            downloaded_paths.append(image_path)
-                            print(f">>> Đã tải ảnh {img_num}: {image_path}")
-                        else:
-                            downloaded_paths.append(f"LỖI_ẢNH_{img_num}")
-                    else:
-                        print(f"[Bỏ qua] Link ảnh {img_num} không hợp lệ")
-                        downloaded_paths.append(f"KHÔNG_TÌM_THẤY_{img_num}")
-                    
-                except Exception as e:
-                    print(f"[Lỗi] Không thể tải ảnh {img_num}: {e}")
-                    downloaded_paths.append(f"LỖI_ẢNH_{img_num}")
-            
-            # 8. Ghi tất cả đường dẫn vào Excel (cột 3, 4, 5)
-            if downloaded_paths:
-                write_image_paths_to_excel(EXCEL_FILE, index, downloaded_paths)
-            else:
-                write_image_paths_to_excel(EXCEL_FILE, index, ["KHÔNG TÌM THẤY", "", ""])
-                # Lưu screenshot để debug
-                screenshot_path = f"debug_{barcode[:20]}.png"
-                driver.save_screenshot(screenshot_path)
-                print(f">>> Đã lưu screenshot: {screenshot_path}")
-
-        except Exception as e:
-            print(f"[Lỗi] Có vấn đề khi xử lý {name}: {e}")
-            write_image_paths_to_excel(EXCEL_FILE, index, ["LỖI", "LỖI", "LỖI"])
-            # Lưu screenshot khi lỗi
+        # Xử lý kết quả khi hoàn thành
+        for future in as_completed(future_to_product):
+            completed += 1
             try:
-                driver.save_screenshot(f"error_{barcode[:20]}.png")
-            except:
-                pass
+                result = future.result()
+                if result:
+                    print(f"[Progress] {completed}/{total} sản phẩm hoàn thành")
+            except Exception as e:
+                print(f"[Lỗi] Task failed: {e}")
     
-    print(">>> Hoàn tất! Đóng trình duyệt.")
-    driver.quit()
+    print(f"\n{'='*60}")
+    print(">>> HOÀN TẤT TẤT CẢ SẢN PHẨM!")
+    print(f"{'='*60}\n")
 
 if __name__ == "__main__":
     main()
