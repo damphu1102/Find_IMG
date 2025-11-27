@@ -106,16 +106,22 @@ def download_image(url, filename, folder):
         return None
 
 def read_products_from_excel(file_path):
-    """Đọc danh sách sản phẩm từ cột đầu tiên của Excel"""
+    """Đọc danh sách sản phẩm từ Excel: cột 1 (barcode), cột 2 (name)"""
     try:
         wb = openpyxl.load_workbook(file_path)
         ws = wb.active
         
         products = []
-        # Đọc từ dòng 2 (bỏ qua header)
-        for row in ws.iter_rows(min_row=2, min_col=1, max_col=1, values_only=True):
-            if row[0]:  # Nếu có giá trị
-                products.append(str(row[0]).strip())
+        # Đọc từ dòng 2 (bỏ qua header), đọc cả 2 cột
+        for row in ws.iter_rows(min_row=2, min_col=1, max_col=2, values_only=True):
+            barcode = str(row[0]).strip() if row[0] else None
+            name = str(row[1]).strip() if row[1] else None
+            
+            if barcode and name:  # Cả 2 cột đều phải có giá trị
+                products.append({
+                    'barcode': barcode,
+                    'name': name
+                })
         
         wb.close()
         print(f">>> Đã đọc {len(products)} sản phẩm từ Excel")
@@ -125,13 +131,13 @@ def read_products_from_excel(file_path):
         return []
 
 def write_image_name_to_excel(file_path, row_index, image_name):
-    """Ghi tên file ảnh vào cột thứ 2 của Excel"""
+    """Ghi tên file ảnh vào cột thứ 3 (img) của Excel"""
     try:
         wb = openpyxl.load_workbook(file_path)
         ws = wb.active
         
-        # Ghi vào cột B (cột 2), dòng tương ứng
-        ws.cell(row=row_index, column=2, value=image_name)
+        # Ghi vào cột C (cột 3), dòng tương ứng
+        ws.cell(row=row_index, column=3, value=image_name)
         
         wb.save(file_path)
         print(f">>> Đã ghi '{image_name}' vào Excel dòng {row_index}")
@@ -170,12 +176,16 @@ def main():
     
     print(f">>> URL hiện tại: {driver.current_url}")
 
-    for index, ten_sp in enumerate(products, start=2):  # start=2 vì dòng 1 là header
-        print(f"\n--- Đang tìm: {ten_sp} ---")
+    for index, product in enumerate(products, start=2):  # start=2 vì dòng 1 là header
+        barcode = product['barcode']
+        name = product['name']
+        
+        print(f"\n--- Đang xử lý: {name} (Barcode: {barcode}) ---")
         
         try:
-            # 1. Tạo URL tìm kiếm Google Images
-            search_url = f"https://www.google.com/search?q={ten_sp.replace(' ', '+')}&tbm=isch&hl=vi"
+            # 1. Tạo URL tìm kiếm Google Images theo BARCODE
+            search_url = f"https://www.google.com/search?q={barcode.replace(' ', '+')}&tbm=isch&hl=vi"
+            print(f">>> Tìm kiếm theo barcode: {barcode}")
             print(f">>> Truy cập: {search_url}")
             driver.get(search_url)
             
@@ -262,26 +272,26 @@ def main():
                 print(">>> Không lấy được ảnh full, dùng thumbnail...")
                 img_url = thumbnail.get_attribute("src")
             
-            # 7. Download ảnh
+            # 7. Download ảnh - Đặt tên theo NAME (cột 2)
             if img_url and "http" in img_url:
-                image_name = download_image(img_url, ten_sp, FOLDER_NAME)
+                image_name = download_image(img_url, name, FOLDER_NAME)
                 if image_name:
-                    # Ghi tên file vào Excel
+                    # Ghi tên file vào cột 3 (img) của Excel
                     write_image_name_to_excel(EXCEL_FILE, index, image_name)
             else:
                 print(f"[Bỏ qua] Link ảnh không hợp lệ: {img_url}")
                 write_image_name_to_excel(EXCEL_FILE, index, "KHÔNG TÌM THẤY")
                 # Lưu screenshot để debug
-                screenshot_path = f"debug_{ten_sp[:20]}.png"
+                screenshot_path = f"debug_{barcode[:20]}.png"
                 driver.save_screenshot(screenshot_path)
                 print(f">>> Đã lưu screenshot: {screenshot_path}")
 
         except Exception as e:
-            print(f"[Lỗi] Có vấn đề khi xử lý {ten_sp}: {e}")
+            print(f"[Lỗi] Có vấn đề khi xử lý {name}: {e}")
             write_image_name_to_excel(EXCEL_FILE, index, "LỖI")
             # Lưu screenshot khi lỗi
             try:
-                driver.save_screenshot(f"error_{ten_sp[:20]}.png")
+                driver.save_screenshot(f"error_{barcode[:20]}.png")
             except:
                 pass
     
