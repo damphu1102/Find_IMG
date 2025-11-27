@@ -5,8 +5,9 @@ Công cụ tự động tìm kiếm và tải hình ảnh sản phẩm từ Goog
 ## Tính năng
 
 - ✅ Đọc danh sách sản phẩm từ file Excel (DSSP.xlsx)
-- ✅ Tự động tìm kiếm trên Google Images theo barcode
-- ✅ **Tải 3 ảnh đầu tiên** cho mỗi sản phẩm (có đánh số thứ tự)
+- ✅ **Tìm kiếm thông minh**: Kết hợp barcode + tên sản phẩm để tăng độ chính xác
+- ✅ **Tự động chọn ảnh kế tiếp**: Nếu không tải được ảnh, tự động thử ảnh tiếp theo
+- ✅ **Luôn cố gắng lấy đủ 3 ảnh**: Lặp qua tối đa 15 ảnh để tìm 3 ảnh tốt
 - ✅ **Multi-threading**: Chạy 3 browser song song (tăng tốc 3x)
 - ✅ **Thread-safe Excel writing**: Tránh corrupt file khi ghi đồng thời
 - ✅ Click vào ảnh để lấy phiên bản full size (chất lượng cao)
@@ -63,7 +64,7 @@ Mở file `DSSP.xlsx` và nhập danh sách sản phẩm vào **cột A (barcode
 
 **Lưu ý quan trọng:**
 - ⚠️ **Đóng file Excel trước khi chạy script** để tránh lỗi ghi file
-- Script sẽ tìm kiếm theo **barcode** (cột A), không phải tên sản phẩm
+- Script sẽ tìm kiếm theo **barcode + tên sản phẩm** (cột A + cột B) để tăng độ chính xác
 - Tên file ảnh sẽ dựa trên **name** (cột B)
 
 ### 2. Chạy script
@@ -78,16 +79,20 @@ Script sẽ:
 
 1. Khởi động **3 Chrome instances** song song (mỗi cái có profile riêng)
 2. Truy cập Google Images
-3. Tìm kiếm từng sản phẩm theo **barcode** (cột A)
-4. Click vào **3 ảnh đầu tiên** để lấy full size
-5. Tải ảnh về thư mục `hinh_anh_san_pham` với số thứ tự (_1, _2, _3)
-6. Ghi tên file vào cột C, D, E của Excel (thread-safe)
-7. Hiển thị progress: "X/Y sản phẩm hoàn thành"
+3. Tìm kiếm từng sản phẩm theo **barcode + tên sản phẩm** (cột A + cột B)
+4. Tìm tối đa **15 ảnh** trong kết quả
+5. **Tự động chọn ảnh kế tiếp** nếu không tải được ảnh hiện tại
+6. Lặp cho đến khi lấy đủ **3 ảnh** hoặc hết ảnh để thử
+7. Tải ảnh về thư mục `hinh_anh_san_pham` với số thứ tự (_1, _2, _3)
+8. Ghi tên file vào cột C, D, E của Excel (thread-safe)
+9. Hiển thị progress: "X/Y sản phẩm hoàn thành"
 
 **Bạn sẽ thấy:**
 - 3 cửa sổ Chrome mở cùng lúc
 - Mỗi cửa sổ xử lý một sản phẩm khác nhau
 - Log hiển thị `[Worker 0]`, `[Worker 1]`, `[Worker 2]`
+- Tìm kiếm kết hợp: "8850006325636 KDR Colgate TOT ActiveFresh 150g"
+- Log chi tiết: "✓ Đã tải ảnh 1/3", "✗ Không tải được, thử ảnh tiếp theo..."
 
 ### 4. Kết quả
 
@@ -227,6 +232,18 @@ MIT License - Tự do sử dụng cho mục đích cá nhân và thương mại.
 Phát triển bởi AI Assistant với sự hỗ trợ của Kiro IDE.
 
 ## Changelog
+
+### v2.4.0 (2024-11-27)
+
+- ✅ **Tự động chọn ảnh kế tiếp**: Khi không tải được ảnh, tự động thử ảnh tiếp theo
+- ✅ **Luôn cố gắng lấy đủ 3 ảnh**: Lặp qua tối đa 15 ảnh để tìm 3 ảnh tốt
+- ✅ **Logging chi tiết**: Hiển thị "✓ Đã tải ảnh 1/3", "✗ Không tải được, thử ảnh tiếp theo"
+- ✅ Giảm thiểu lỗi "LỖI_ẢNH" trong Excel
+
+### v2.3.0 (2024-11-27)
+
+- ✅ **Tìm kiếm thông minh**: Kết hợp barcode + tên sản phẩm để tăng độ chính xác
+- ✅ Giảm thiểu ảnh sai do tìm kiếm chỉ bằng barcode
 
 ### v2.2.0 (2024-11-27)
 

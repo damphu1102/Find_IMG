@@ -20,7 +20,7 @@ from selenium.webdriver.support import expected_conditions as EC
 # --- CẤU HÌNH ---
 FOLDER_NAME = "hinh_anh_san_pham"
 EXCEL_FILE = "DSSP.xlsx"
-NUM_WORKERS = 3  # Số browser chạy song song (3 khuyến nghị, 4-5 nếu RAM >= 16GB)
+NUM_WORKERS = 8  # Số browser chạy song song (3 khuyến nghị, 4-5 nếu RAM >= 16GB)
 
 # Lock để tránh xung đột khi ghi Excel
 excel_lock = threading.Lock()
@@ -202,9 +202,10 @@ def process_product_thread(product_data, worker_id):
         driver.get("https://www.google.com/imghp?hl=vi")
         time.sleep(2)
         
-        # 1. Tạo URL tìm kiếm Google Images theo BARCODE
-        search_url = f"https://www.google.com/search?q={barcode.replace(' ', '+')}&tbm=isch&hl=vi"
-        print(f"[Worker {worker_id}] >>> Tìm kiếm theo barcode: {barcode}")
+        # 1. Tạo URL tìm kiếm Google Images theo BARCODE + TÊN SẢN PHẨM
+        search_query = f"{barcode} {name}"
+        search_url = f"https://www.google.com/search?q={search_query.replace(' ', '+')}&tbm=isch&hl=vi"
+        print(f"[Worker {worker_id}] >>> Tìm kiếm: {search_query}")
         driver.get(search_url)
         
         # 2. Random delay (giảm xuống vì có nhiều worker)
@@ -212,8 +213,8 @@ def process_product_thread(product_data, worker_id):
         print(f"[Worker {worker_id}] >>> Đợi {delay:.1f}s để trang load...")
         time.sleep(delay)
         
-        # 3. Tìm 3 ảnh đầu tiên có thể click được
-        print(f"[Worker {worker_id}] >>> Tìm 3 ảnh đầu tiên trong kết quả...")
+        # 3. Tìm tất cả ảnh có thể click được (tối đa 15 ảnh)
+        print(f"[Worker {worker_id}] >>> Tìm ảnh trong kết quả...")
         
         # Thử nhiều selector khác nhau cho Google Images
         thumbnail_selectors = [
@@ -223,7 +224,7 @@ def process_product_thread(product_data, worker_id):
             '//h3//ancestor::div[2]//img'
         ]
         
-        thumbnails_to_click = []
+        all_thumbnails = []
         for selector in thumbnail_selectors:
             try:
                 WebDriverWait(driver, 5).until(
@@ -231,33 +232,37 @@ def process_product_thread(product_data, worker_id):
                 )
                 thumbnails = driver.find_elements(By.XPATH, selector)
                 
-                # Tìm 3 ảnh đầu tiên có thể click được
-                for thumb in thumbnails[:15]:  # Thử 15 ảnh đầu để tìm 3 ảnh tốt
+                # Lấy tất cả ảnh có thể click (tối đa 15)
+                for thumb in thumbnails[:15]:
                     try:
                         if thumb.is_displayed() and thumb.size['width'] > 50:
-                            thumbnails_to_click.append(thumb)
-                            if len(thumbnails_to_click) == 3:
-                                print(f"[Worker {worker_id}] >>> Tìm thấy 3 ảnh!")
-                                break
+                            all_thumbnails.append(thumb)
                     except:
                         continue
                 
-                if len(thumbnails_to_click) >= 3:
+                if len(all_thumbnails) >= 3:
                     break
             except:
                 continue
         
-        if not thumbnails_to_click:
+        if not all_thumbnails:
             raise Exception("Không tìm thấy ảnh có thể click")
         
-        print(f"[Worker {worker_id}] >>> Tìm được {len(thumbnails_to_click)} ảnh")
+        print(f"[Worker {worker_id}] >>> Tìm được {len(all_thumbnails)} ảnh, cần lấy 3 ảnh")
         
-        # 4. Lặp qua 3 ảnh và tải về
+        # 4. Lặp qua các ảnh và tải về cho đến khi đủ 3 ảnh
         downloaded_paths = []
+        thumbnail_index = 0
+        attempts = 0
+        max_attempts = len(all_thumbnails)
         
-        for img_num, thumbnail in enumerate(thumbnails_to_click, start=1):
+        while len(downloaded_paths) < 3 and thumbnail_index < max_attempts:
+            attempts += 1
+            img_num = len(downloaded_paths) + 1
+            thumbnail = all_thumbnails[thumbnail_index]
+            
             try:
-                print(f"[Worker {worker_id}] >>> Đang xử lý ảnh {img_num}/3...")
+                print(f"[Worker {worker_id}] >>> Đang thử ảnh thứ {thumbnail_index + 1} (cần ảnh {img_num}/3)...")
                 
                 # Click vào ảnh bằng JavaScript
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", thumbnail)
@@ -297,15 +302,26 @@ def process_product_thread(product_data, worker_id):
                     image_path = download_image(img_url, name, FOLDER_NAME, img_num)
                     if image_path:
                         downloaded_paths.append(image_path)
-                        print(f"[Worker {worker_id}] >>> Đã tải ảnh {img_num}")
+                        print(f"[Worker {worker_id}] >>> ✓ Đã tải ảnh {img_num}/3")
                     else:
-                        downloaded_paths.append(f"LỖI_ẢNH_{img_num}")
+                        print(f"[Worker {worker_id}] >>> ✗ Không tải được, thử ảnh tiếp theo...")
                 else:
-                    downloaded_paths.append(f"KHÔNG_TÌM_THẤY_{img_num}")
+                    print(f"[Worker {worker_id}] >>> ✗ Link không hợp lệ, thử ảnh tiếp theo...")
                 
             except Exception as e:
-                print(f"[Worker {worker_id}] [Lỗi] Không thể tải ảnh {img_num}: {e}")
-                downloaded_paths.append(f"LỖI_ẢNH_{img_num}")
+                print(f"[Worker {worker_id}] >>> ✗ Lỗi: {str(e)[:50]}, thử ảnh tiếp theo...")
+            
+            # Chuyển sang ảnh tiếp theo
+            thumbnail_index += 1
+        
+        # Kiểm tra kết quả
+        if len(downloaded_paths) < 3:
+            print(f"[Worker {worker_id}] >>> ⚠ Chỉ lấy được {len(downloaded_paths)}/3 ảnh sau {attempts} lần thử")
+            # Điền các cột còn lại bằng thông báo
+            while len(downloaded_paths) < 3:
+                downloaded_paths.append("KHÔNG_TẢI_ĐƯỢC")
+        else:
+            print(f"[Worker {worker_id}] >>> ✓ Đã lấy đủ 3/3 ảnh sau {attempts} lần thử")
         
         # 8. Ghi tất cả đường dẫn vào Excel (cột 3, 4, 5)
         if downloaded_paths:
