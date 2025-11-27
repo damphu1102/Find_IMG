@@ -5,15 +5,17 @@ Công cụ tự động tìm kiếm và tải hình ảnh sản phẩm từ Goog
 ## Tính năng
 
 - ✅ Đọc danh sách sản phẩm từ file Excel (DSSP.xlsx)
-- ✅ Tự động tìm kiếm trên Google Images
+- ✅ Tự động tìm kiếm trên Google Images theo barcode
 - ✅ **Tải 3 ảnh đầu tiên** cho mỗi sản phẩm (có đánh số thứ tự)
-- ✅ **Multiprocessing**: Chạy 3 browser song song (tăng tốc 3x)
+- ✅ **Multi-threading**: Chạy 3 browser song song (tăng tốc 3x)
+- ✅ **Thread-safe Excel writing**: Tránh corrupt file khi ghi đồng thời
 - ✅ Click vào ảnh để lấy phiên bản full size (chất lượng cao)
 - ✅ Tải ảnh về thư mục `hinh_anh_san_pham`
 - ✅ Tự động ghi tên file ảnh vào Excel (3 cột riêng biệt)
 - ✅ Tên file không dấu, thay khoảng trắng bằng `_`
-- ✅ Sử dụng Chrome profile để tránh bị chặn
+- ✅ Profile riêng cho mỗi thread để tránh xung đột
 - ✅ Anti-detection (tránh bị phát hiện là bot)
+- ✅ Progress tracking (hiển thị tiến độ)
 
 ## Yêu cầu hệ thống
 
@@ -54,10 +56,15 @@ Find_IMG/
 
 Mở file `DSSP.xlsx` và nhập danh sách sản phẩm vào **cột A (barcode)** và **cột B (name)** (từ dòng 2 trở đi):
 
-| Barcode | Tên sản phẩm             | Ảnh 1            | Ảnh 2            | Ảnh 3            |
-| ------- | ------------------------ | ---------------- | ---------------- | ---------------- |
-| 8934868...  | Colgate Active Fresh 150g  | _(tự động điền)_ | _(tự động điền)_ | _(tự động điền)_ |
-| 8936097...  | Kem đánh răng PS 200g | _(tự động điền)_ | _(tự động điền)_ | _(tự động điền)_ |
+| Barcode      | Tên sản phẩm                  | Ảnh 1            | Ảnh 2            | Ảnh 3            |
+| ------------ | ----------------------------- | ---------------- | ---------------- | ---------------- |
+| 8850006325636 | KDR Colgate TOT ActiveFresh 150g | _(tự động điền)_ | _(tự động điền)_ | _(tự động điền)_ |
+| 8850006332030 | BCDR Colgate 360 Char Spiral 2   | _(tự động điền)_ | _(tự động điền)_ | _(tự động điền)_ |
+
+**Lưu ý quan trọng:**
+- ⚠️ **Đóng file Excel trước khi chạy script** để tránh lỗi ghi file
+- Script sẽ tìm kiếm theo **barcode** (cột A), không phải tên sản phẩm
+- Tên file ảnh sẽ dựa trên **name** (cột B)
 
 ### 2. Chạy script
 
@@ -69,12 +76,18 @@ python find.py
 
 Script sẽ:
 
-1. Mở Chrome với profile riêng
+1. Khởi động **3 Chrome instances** song song (mỗi cái có profile riêng)
 2. Truy cập Google Images
-3. Tìm kiếm từng sản phẩm theo barcode (cột A)
+3. Tìm kiếm từng sản phẩm theo **barcode** (cột A)
 4. Click vào **3 ảnh đầu tiên** để lấy full size
 5. Tải ảnh về thư mục `hinh_anh_san_pham` với số thứ tự (_1, _2, _3)
-6. Ghi tên file vào cột C, D, E của Excel
+6. Ghi tên file vào cột C, D, E của Excel (thread-safe)
+7. Hiển thị progress: "X/Y sản phẩm hoàn thành"
+
+**Bạn sẽ thấy:**
+- 3 cửa sổ Chrome mở cùng lúc
+- Mỗi cửa sổ xử lý một sản phẩm khác nhau
+- Log hiển thị `[Worker 0]`, `[Worker 1]`, `[Worker 2]`
 
 ### 4. Kết quả
 
@@ -97,19 +110,42 @@ FOLDER_NAME = "hinh_anh_san_pham"
 # File Excel
 EXCEL_FILE = "DSSP.xlsx"
 
-# Số browser chạy song song (3-5 tùy RAM)
+# Số browser chạy song song (3 khuyến nghị)
 NUM_WORKERS = 3
 
 # Chạy ẩn (không hiện trình duyệt)
 # chrome_options.add_argument("--headless")  # Bỏ comment để bật
 ```
 
-**Lưu ý về NUM_WORKERS:**
-- 3 workers: Phù hợp với máy 8GB RAM
-- 4-5 workers: Máy 16GB RAM trở lên
-- Mỗi Chrome instance tốn ~500MB-1GB RAM
+**Khuyến nghị về NUM_WORKERS:**
+- **3 workers** (khuyến nghị): Ổn định nhất, phù hợp mọi máy 8GB+ RAM
+- **4-5 workers**: Chỉ dùng nếu máy có 16GB+ RAM và muốn tăng tốc
+- ⚠️ **Lưu ý**: Quá nhiều workers có thể gây:
+  - Chrome crash do thiếu RAM
+  - Google phát hiện và chặn
+  - File Excel bị corrupt (đã fix bằng thread-safe lock)
 
 ## Xử lý lỗi
+
+### Lỗi: "Bad CRC-32 for file 'xl/worksheets/sheet1.xml'"
+
+**Nguyên nhân**: File Excel bị corrupt do đang mở hoặc bị ghi đồng thời
+
+**Giải pháp**:
+1. ⚠️ **Đóng file Excel** trước khi chạy script
+2. Nếu file đã bị corrupt:
+   - Backup file DSSP.xlsx
+   - Mở bằng Excel và "Save As" với tên mới
+   - Hoặc tạo lại file từ backup
+
+### Lỗi: "Chrome instance exited" / "failed to write prefs file"
+
+**Nguyên nhân**: Quá nhiều Chrome instances hoặc thiếu RAM
+
+**Giải pháp**:
+1. Giảm `NUM_WORKERS` xuống 2 hoặc 3
+2. Đóng các ứng dụng khác để giải phóng RAM
+3. Xóa thư mục `selenium_profile_worker_*` và chạy lại
 
 ### Lỗi: "Không tìm thấy ảnh"
 
@@ -117,36 +153,30 @@ NUM_WORKERS = 3
 - Thử chạy lại sau vài phút
 - Kiểm tra screenshot debug: `debug_*.png`
 
-### Lỗi: "SessionNotCreatedException"
-
-- Đóng tất cả cửa sổ Chrome trước khi chạy
-- Hoặc script sẽ tự động dùng profile riêng
-
 ### Lỗi: CAPTCHA
 
 - Google phát hiện quá nhiều request
-- Tăng delay giữa các lần tìm kiếm
+- Giảm `NUM_WORKERS` xuống 2
+- Tăng delay trong code (dòng `random.uniform(2, 3)` → `random.uniform(3, 5)`)
 - Chạy lại sau 10-15 phút
-
-### Excel bị lỗi khi ghi
-
-- Đóng file Excel trước khi chạy script
-- Kiểm tra quyền ghi file
 
 ## Lưu ý
 
 ⚠️ **Quan trọng:**
 
-- Đóng tất cả Chrome trước khi chạy (hoặc script dùng profile riêng)
+- ⚠️ **Đóng file Excel trước khi chạy** để tránh lỗi "Bad CRC-32"
 - Không đóng cửa sổ Chrome khi script đang chạy
 - Google có thể chặn nếu request quá nhanh
-- Delay mặc định: 3-5 giây giữa mỗi sản phẩm
+- Delay mặc định: 2-3 giây giữa mỗi request (đã tối ưu)
+- Script tự động tạo profile riêng cho mỗi worker
 
 💡 **Tips:**
 
 - Chạy vào giờ thấp điểm để tránh bị chặn
-- Nếu có nhiều sản phẩm, chia nhỏ file Excel
+- Nếu có nhiều sản phẩm (>100), chia nhỏ file Excel
 - Kiểm tra kết quả trong Excel sau khi chạy xong
+- Nếu bị lỗi giữa chừng, chạy lại script (sẽ skip sản phẩm đã có ảnh)
+- Xóa thư mục `selenium_profile_worker_*` định kỳ để giải phóng dung lượng
 
 ## Troubleshooting
 
@@ -164,11 +194,29 @@ pip install --upgrade webdriver-manager
 pip install --upgrade openpyxl
 ```
 
+### Excel bị corrupt (Bad CRC-32)
+
+```bash
+# Xóa các profile cũ
+rmdir /s /q selenium_profile_worker_0
+rmdir /s /q selenium_profile_worker_1
+rmdir /s /q selenium_profile_worker_2
+
+# Hoặc trên Linux/Mac:
+rm -rf selenium_profile_worker_*
+```
+
 ### Ảnh tải về bị lỗi
 
 - Kiểm tra kết nối internet
 - Một số ảnh có thể bị bảo vệ bản quyền
 - Thử tìm kiếm thủ công để xác nhận
+
+### Script chạy chậm hoặc bị treo
+
+- Giảm `NUM_WORKERS` xuống 2
+- Kiểm tra RAM còn trống (Task Manager)
+- Đóng các ứng dụng khác
 
 ## License
 
@@ -179,6 +227,14 @@ MIT License - Tự do sử dụng cho mục đích cá nhân và thương mại.
 Phát triển bởi AI Assistant với sự hỗ trợ của Kiro IDE.
 
 ## Changelog
+
+### v2.2.0 (2024-11-27)
+
+- ✅ **Chuyển từ Multiprocessing sang Threading**: Fix lỗi "Bad CRC-32" trên Windows
+- ✅ **Thread-safe Excel writing**: Sử dụng `threading.Lock` thay vì `multiprocessing.Lock`
+- ✅ **Profile riêng cho mỗi thread**: Tránh xung đột "failed to write prefs file"
+- ✅ **Progress tracking**: Hiển thị "X/Y sản phẩm hoàn thành"
+- ✅ Giảm startup delay xuống 0.3-1.0s (threads nhẹ hơn processes)
 
 ### v2.1.0 (2024-11-27)
 
