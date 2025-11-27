@@ -2,6 +2,7 @@ import time
 import random
 import os
 import requests
+import openpyxl
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -12,14 +13,7 @@ from selenium.webdriver.support import expected_conditions as EC
 
 # --- CẤU HÌNH ---
 FOLDER_NAME = "hinh_anh_san_pham"
-# Danh sách mẫu (Trong thực tế bạn sẽ đọc từ file Excel/TXT)
-DANH_SACH_SP = [
-    "iPhone 15 Pro Max 256GB",
-    "Samsung Galaxy S24 Ultra",
-    "Chuột Logitech G102",
-    "Bàn phím cơ Keychron K2",
-    "Tai nghe Sony WH-1000XM5"
-]
+EXCEL_FILE = "DSSP.xlsx"
 
 def setup_driver():
     """Cấu hình Chrome Driver để tránh bị phát hiện là Bot"""
@@ -48,27 +42,110 @@ def setup_driver():
     driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
+def remove_vietnamese_accents(text):
+    """Chuyển tiếng Việt có dấu thành không dấu"""
+    vietnamese_map = {
+        'à': 'a', 'á': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a',
+        'ă': 'a', 'ằ': 'a', 'ắ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a',
+        'â': 'a', 'ầ': 'a', 'ấ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a',
+        'è': 'e', 'é': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e',
+        'ê': 'e', 'ề': 'e', 'ế': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e',
+        'ì': 'i', 'í': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i',
+        'ò': 'o', 'ó': 'o', 'ỏ': 'o', 'õ': 'o', 'ọ': 'o',
+        'ô': 'o', 'ồ': 'o', 'ố': 'o', 'ổ': 'o', 'ỗ': 'o', 'ộ': 'o',
+        'ơ': 'o', 'ờ': 'o', 'ớ': 'o', 'ở': 'o', 'ỡ': 'o', 'ợ': 'o',
+        'ù': 'u', 'ú': 'u', 'ủ': 'u', 'ũ': 'u', 'ụ': 'u',
+        'ư': 'u', 'ừ': 'u', 'ứ': 'u', 'ử': 'u', 'ữ': 'u', 'ự': 'u',
+        'ỳ': 'y', 'ý': 'y', 'ỷ': 'y', 'ỹ': 'y', 'ỵ': 'y',
+        'đ': 'd',
+        'À': 'A', 'Á': 'A', 'Ả': 'A', 'Ã': 'A', 'Ạ': 'A',
+        'Ă': 'A', 'Ằ': 'A', 'Ắ': 'A', 'Ẳ': 'A', 'Ẵ': 'A', 'Ặ': 'A',
+        'Â': 'A', 'Ầ': 'A', 'Ấ': 'A', 'Ẩ': 'A', 'Ẫ': 'A', 'Ậ': 'A',
+        'È': 'E', 'É': 'E', 'Ẻ': 'E', 'Ẽ': 'E', 'Ẹ': 'E',
+        'Ê': 'E', 'Ề': 'E', 'Ế': 'E', 'Ể': 'E', 'Ễ': 'E', 'Ệ': 'E',
+        'Ì': 'I', 'Í': 'I', 'Ỉ': 'I', 'Ĩ': 'I', 'Ị': 'I',
+        'Ò': 'O', 'Ó': 'O', 'Ỏ': 'O', 'Õ': 'O', 'Ọ': 'O',
+        'Ô': 'O', 'Ồ': 'O', 'Ố': 'O', 'Ổ': 'O', 'Ỗ': 'O', 'Ộ': 'O',
+        'Ơ': 'O', 'Ờ': 'O', 'Ớ': 'O', 'Ở': 'O', 'Ỡ': 'O', 'Ợ': 'O',
+        'Ù': 'U', 'Ú': 'U', 'Ủ': 'U', 'Ũ': 'U', 'Ụ': 'U',
+        'Ư': 'U', 'Ừ': 'U', 'Ứ': 'U', 'Ử': 'U', 'Ữ': 'U', 'Ự': 'U',
+        'Ỳ': 'Y', 'Ý': 'Y', 'Ỷ': 'Y', 'Ỹ': 'Y', 'Ỵ': 'Y',
+        'Đ': 'D'
+    }
+    
+    result = ""
+    for char in text:
+        result += vietnamese_map.get(char, char)
+    return result
+
 def download_image(url, filename, folder):
-    """Hàm tải ảnh từ URL và lưu vào folder"""
+    """Hàm tải ảnh từ URL và lưu vào folder. Trả về tên file đã lưu hoặc None nếu lỗi"""
     try:
         if not os.path.exists(folder):
             os.makedirs(folder)
             
         response = requests.get(url, stream=True, timeout=10)
         if response.status_code == 200:
-            # Làm sạch tên file (bỏ các ký tự đặc biệt)
-            valid_filename = "".join([c for c in filename if c.isalpha() or c.isdigit() or c==' ']).rstrip()
-            file_path = os.path.join(folder, f"{valid_filename}.jpg")
+            # Bỏ dấu tiếng Việt
+            no_accent = remove_vietnamese_accents(filename)
+            # Chỉ giữ chữ, số và khoảng trắng
+            clean_name = "".join([c for c in no_accent if c.isalnum() or c == ' ']).strip()
+            # Thay khoảng trắng bằng dấu gạch dưới
+            file_name = f"{clean_name.replace(' ', '_')}.jpg"
+            file_path = os.path.join(folder, file_name)
             
             with open(file_path, 'wb') as f:
                 f.write(response.content)
-            print(f"[OK] Đã tải: {valid_filename}")
+            print(f"[OK] Đã tải: {file_name}")
+            return file_name
         else:
             print(f"[Lỗi] Không tải được ảnh: {filename}")
+            return None
     except Exception as e:
         print(f"[Lỗi] Exception khi tải ảnh {filename}: {e}")
+        return None
+
+def read_products_from_excel(file_path):
+    """Đọc danh sách sản phẩm từ cột đầu tiên của Excel"""
+    try:
+        wb = openpyxl.load_workbook(file_path)
+        ws = wb.active
+        
+        products = []
+        # Đọc từ dòng 2 (bỏ qua header)
+        for row in ws.iter_rows(min_row=2, min_col=1, max_col=1, values_only=True):
+            if row[0]:  # Nếu có giá trị
+                products.append(str(row[0]).strip())
+        
+        wb.close()
+        print(f">>> Đã đọc {len(products)} sản phẩm từ Excel")
+        return products
+    except Exception as e:
+        print(f"[Lỗi] Không đọc được file Excel: {e}")
+        return []
+
+def write_image_name_to_excel(file_path, row_index, image_name):
+    """Ghi tên file ảnh vào cột thứ 2 của Excel"""
+    try:
+        wb = openpyxl.load_workbook(file_path)
+        ws = wb.active
+        
+        # Ghi vào cột B (cột 2), dòng tương ứng
+        ws.cell(row=row_index, column=2, value=image_name)
+        
+        wb.save(file_path)
+        print(f">>> Đã ghi '{image_name}' vào Excel dòng {row_index}")
+    except Exception as e:
+        print(f"[Lỗi] Không ghi được vào Excel: {e}")
 
 def main():
+    # Đọc danh sách sản phẩm từ Excel
+    products = read_products_from_excel(EXCEL_FILE)
+    
+    if not products:
+        print("[Lỗi] Không có sản phẩm nào để xử lý!")
+        return
+    
     print(">>> Đang khởi động Chrome với profile user...")
     driver = setup_driver()
     
@@ -93,7 +170,7 @@ def main():
     
     print(f">>> URL hiện tại: {driver.current_url}")
 
-    for ten_sp in DANH_SACH_SP:
+    for index, ten_sp in enumerate(products, start=2):  # start=2 vì dòng 1 là header
         print(f"\n--- Đang tìm: {ten_sp} ---")
         
         try:
@@ -187,9 +264,13 @@ def main():
             
             # 7. Download ảnh
             if img_url and "http" in img_url:
-                download_image(img_url, ten_sp, FOLDER_NAME)
+                image_name = download_image(img_url, ten_sp, FOLDER_NAME)
+                if image_name:
+                    # Ghi tên file vào Excel
+                    write_image_name_to_excel(EXCEL_FILE, index, image_name)
             else:
                 print(f"[Bỏ qua] Link ảnh không hợp lệ: {img_url}")
+                write_image_name_to_excel(EXCEL_FILE, index, "KHÔNG TÌM THẤY")
                 # Lưu screenshot để debug
                 screenshot_path = f"debug_{ten_sp[:20]}.png"
                 driver.save_screenshot(screenshot_path)
@@ -197,6 +278,7 @@ def main():
 
         except Exception as e:
             print(f"[Lỗi] Có vấn đề khi xử lý {ten_sp}: {e}")
+            write_image_name_to_excel(EXCEL_FILE, index, "LỖI")
             # Lưu screenshot khi lỗi
             try:
                 driver.save_screenshot(f"error_{ten_sp[:20]}.png")
