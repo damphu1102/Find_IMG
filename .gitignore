@@ -32,6 +32,7 @@ error_*.png
 
 # Project specific
 hinh_anh_san_pham/
+DSSP.xlsx
 
 # IDE
 .vscode/
